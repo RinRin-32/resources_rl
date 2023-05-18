@@ -9,6 +9,8 @@ from tqdm import tqdm
 import framework
 import utils
 
+device = torch.device('cuda' if torch.cuda.is_avaliable() else 'cpu')
+
 DEBUG = False
 
 GAMMA = 0.5  # discounted factor
@@ -41,7 +43,13 @@ def epsilon_greedy(state_vector, epsilon):
         (int, int): the indices describing the action/object to take
     """
     # TODO Your code here
-    action_index, object_index = None, None
+    if np.random.random() < epsilon:
+        action_index, object_index = np.random.randint(0, NUM_ACTIONS), \
+                                     np.random.randint(0, NUM_OBJECTS)
+    else:
+        q_values_action, q_values_object = model(state_vector.to(device))
+        _, action_index = q_values_action.max(0)
+        _, object_index = q_values_object.max(0)
     return (action_index, object_index)
 
 class DQN(nn.Module):
@@ -84,8 +92,14 @@ def deep_q_learning(current_state_vector, action_index, object_index, reward,
     q_value_cur_state = model(current_state_vector)
 
     # TODO Your code here
+    current_Q = 1 / 2 * (q_value_cur_state[0][action_index] + q_value_cur_state[1][object_index])
 
-    loss = None
+    if not terminal:
+        y = torch.as_tensor(float(reward) + (GAMMA * maxq_next)).to(device)
+    else:
+        y = torch.as_tensor(float(reward)).to(device)
+
+    loss = F.mse_loss(current_Q, y)
 
     optimizer.zero_grad()
     loss.backward()
@@ -99,33 +113,43 @@ def run_episode(for_training):
         If for training, update Q function
         If for testing, computes and return cumulative discounted reward
     """
+    # My solution:
     epsilon = TRAINING_EP if for_training else TESTING_EP
-    epi_reward = None
+    epi_reward = 0
 
     # initialize for each episode
-    # TODO Your code here
+    current_room_desc, current_quest_desc, terminal = framework.newGame()
 
-    (current_room_desc, current_quest_desc, terminal) = framework.newGame()
+    t = 0
     while not terminal:
         # Choose next action and execute
         current_state = current_room_desc + current_quest_desc
         current_state_vector = torch.FloatTensor(
-            utils.extract_bow_feature_vector(current_state, dictionary))
+            utils.extract_bow_feature_vector(current_state, dictionary)).to(device)
 
-        # TODO Your code here
+        action_index, object_index = epsilon_greedy(current_state_vector, epsilon)
+
+        next_room_desc, next_quest_desc, reward, terminal = \
+            framework.step_game(current_room_desc, current_quest_desc,
+                                action_index, object_index)
+
+        next_state = next_room_desc + next_quest_desc
+
+        next_state_vector = torch.FloatTensor(
+            utils.extract_bow_feature_vector(next_state, dictionary)).to(device)
 
         if for_training:
             # update Q-function.
-            # TODO Your code here
-            pass
+            deep_q_learning(current_state_vector, action_index, object_index,
+                            reward, next_state_vector, terminal)
 
         if not for_training:
             # update reward
-            # TODO Your code here
-            pass
+            epi_reward += GAMMA ** t * reward
+            t += 1
 
         # prepare next step
-        # TODO Your code here
+        current_room_desc, current_quest_desc = next_room_desc, next_quest_desc
 
     if not for_training:
         return epi_reward
